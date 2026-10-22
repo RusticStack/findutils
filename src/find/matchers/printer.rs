@@ -53,7 +53,9 @@ impl Printer {
         .and_then(|()| out.flush());
         if let Err(e) = result {
             if e.kind() == std::io::ErrorKind::BrokenPipe {
-                std::process::exit(0);
+                // Skua patch: on Windows exit as bash reports a SIGPIPE death (141), like GNU
+                // find under Git Bash.
+                std::process::exit(if cfg!(windows) { 141 } else { 0 });
             }
             if print_error_message {
                 writeln!(

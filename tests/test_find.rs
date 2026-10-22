@@ -1789,10 +1789,17 @@ fn find_exits_cleanly_on_broken_pipe() {
         .read_to_string(&mut stderr)
         .unwrap();
 
-    assert!(
-        status.success(),
+    // Skua patch: on Windows find exits 141, as bash reports a SIGPIPE death.
+    let expected = if cfg!(windows) { Some(141) } else { Some(0) };
+    assert_eq!(
+        status.code(),
+        expected,
         "find should exit cleanly on a broken pipe instead of panicking, \
          got status {status:?}, stderr: {stderr}"
+    );
+    assert!(
+        stderr.is_empty(),
+        "find wrote to stderr on a broken pipe:\n{stderr}"
     );
     assert!(
         !stderr.contains("panicked"),

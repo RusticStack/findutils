@@ -508,7 +508,11 @@ impl CommandBuilder<'_> {
                     if status.success() {
                         Ok(CommandResult::Success)
                     } else if let Some(err) = status.code() {
-                        if err == 255 {
+                        if cfg!(windows) && err == 141 {
+                            // Skua patch: the bundled tools exit 141 where Unix would kill them
+                            // with SIGPIPE; stop as GNU xargs does for a signal death.
+                            Err(CommandExecutionError::Killed { signal: 13 })
+                        } else if err == 255 {
                             Err(CommandExecutionError::UrgentlyFailed)
                         } else {
                             Ok(CommandResult::Failure)
