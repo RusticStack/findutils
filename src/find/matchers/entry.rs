@@ -140,9 +140,14 @@ impl Display for WalkError {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), fmt::Error> {
         let ioe = io::Error::from(self);
         if let Some(path) = &self.path {
-            write!(f, "{}: {}", path.display(), ioe)
+            write!(
+                f,
+                "\u{2018}{}\u{2019}: {}",
+                path.display(),
+                uucore::error::strip_errno(&ioe)
+            )
         } else {
-            write!(f, "{}", ioe)
+            write!(f, "{}", uucore::error::strip_errno(&ioe))
         }
     }
 }

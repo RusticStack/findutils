@@ -377,7 +377,7 @@ enum CommandExecutionError {
     UrgentlyFailed,
     Killed { signal: i32 },
     CannotRun(io::Error),
-    NotFound,
+    NotFound(String),
     Unknown,
 }
 
@@ -388,8 +388,12 @@ impl Display for CommandExecutionError {
             Self::Killed { signal } => {
                 write!(f, "Command was killed with signal {signal}")
             }
-            Self::CannotRun(err) => write!(f, "Command could not be run: {err}"),
-            Self::NotFound => write!(f, "Command not found"),
+            Self::CannotRun(err) => write!(f, "Command could not be run: {}", strip_errno(err)),
+            // Skua: GNU xargs' wording, naming the command.
+            Self::NotFound(program) => write!(
+                f,
+                "failed to run command \u{2018}{program}\u{2019}: No such file or directory"
+            ),
             Self::Unknown => write!(f, "Unknown error running command"),
         }
     }
@@ -533,7 +537,9 @@ impl CommandBuilder<'_> {
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    Err(CommandExecutionError::NotFound)
+                    Err(CommandExecutionError::NotFound(
+                        command.get_program().to_string_lossy().into_owned(),
+                    ))
                 }
                 Err(e) => Err(CommandExecutionError::CannotRun(e)),
             },
@@ -805,7 +811,7 @@ impl Display for XargsError {
         match self {
             Self::ArgumentTooLarge => write!(f, "Argument too large"),
             Self::CommandExecution(e) => write!(f, "{e}"),
-            Self::Io(e) => write!(f, "{e}"),
+            Self::Io(e) => write!(f, "{}", strip_errno(e)),
             Self::Untyped(s) => write!(f, "{s}"),
         }
     }
@@ -1009,6 +1015,8 @@ fn normalize_options(options: Options, matches: &clap::ArgMatches) -> Options {
 
 fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
     let matches = clap::Command::new("xargs")
+        // Skua: `Usage: xargs ...`, not the `xargs.exe` of argv[0] on Windows.
+        .bin_name("xargs")
         .version(crate_version!())
         .about("Run commands using arguments derived from standard input")
         .arg(
@@ -1280,13 +1288,14 @@ pub fn xargs_main(args: &[&str]) -> i32 {
         Ok(CommandResult::Success) => 0,
         Ok(CommandResult::Failure) => 123,
         Err(e) => {
-            eprintln!("Error: {e}");
+            // Skua: messages start with the tool's name, as GNU xargs' do.
+            eprintln!("xargs: {e}");
             if let XargsError::CommandExecution(cx) = e {
                 match cx {
                     CommandExecutionError::UrgentlyFailed => 124,
                     CommandExecutionError::Killed { .. } => 125,
                     CommandExecutionError::CannotRun(_) => 126,
-                    CommandExecutionError::NotFound => 127,
+                    CommandExecutionError::NotFound(_) => 127,
                     CommandExecutionError::Unknown => 1,
                 }
             } else {

@@ -202,7 +202,7 @@ fn xargs_max_chars() {
         .args(&["-s10"])
         .pipe_in("abcdefghijkl ab")
         .fails_with_code(1)
-        .stderr_contains("Error:")
+        .stderr_contains("xargs: ")
         .no_stdout();
 }
 
@@ -218,7 +218,7 @@ fn xargs_exit_on_large() {
         .args(&["-xs11", "-n2"])
         .pipe_in("abcdefg hijklmn")
         .fails_with_code(1)
-        .stderr_contains("Error:")
+        .stderr_contains("xargs: ")
         .no_stdout();
 }
 
@@ -378,7 +378,7 @@ fn xargs_exec_not_found() {
     ucmd()
         .args(&["this-file-does-not-exist"])
         .fails_with_code(127)
-        .stderr_contains("Error:")
+        .stderr_contains("xargs: ")
         .no_stdout();
 }
 
@@ -414,7 +414,7 @@ fn xargs_unterminated_quote() {
         ])
         .pipe_in("a \"b c\nd")
         .fails_with_code(1)
-        .stderr_contains("Error: Unterminated quote:")
+        .stderr_contains("xargs: Unterminated quote:")
         .no_stdout();
 }
 
@@ -432,7 +432,7 @@ fn xargs_quotes_cannot_span_lines() {
         ucmd()
             .args(&["-a", &temp_file.path().to_string_lossy()])
             .fails_with_code(1)
-            .stderr_contains("Error: Unterminated quote:")
+            .stderr_contains("xargs: Unterminated quote:")
             .no_stdout();
     }
 }
@@ -524,7 +524,7 @@ fn xargs_replace() {
         .args(&["-I", "echo", "_ _ bar"])
         .pipe_in("foo")
         .fails()
-        .stderr_contains("Error: Command not found");
+        .stderr_contains("xargs: failed to run command \u{2018}_ _ bar\u{2019}");
 }
 
 #[test]

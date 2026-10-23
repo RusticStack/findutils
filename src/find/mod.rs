@@ -312,7 +312,8 @@ fn process_dir(
         match WalkEntry::from_walkdir(result, config.follow) {
             Err(err) => {
                 ret = 1;
-                writeln!(&mut stderr(), "Error: {err}").unwrap();
+                // Skua: `find: ‘x’: No such file or directory`, as GNU find prints it.
+                writeln!(&mut stderr(), "{}: {err}", program_name()).unwrap();
             }
             Ok(entry) => {
                 let mut matcher_io = matchers::MatcherIO::new(deps);
