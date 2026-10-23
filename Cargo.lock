@@ -506,7 +506,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -755,7 +755,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1257,7 +1257,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1406,7 +1406,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1416,7 +1416,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1576,7 +1576,7 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 [[package]]
 name = "uucore"
 version = "0.12.0"
-source = "git+https://github.com/RusticStack/coreutils?rev=509f47988320446e9d15bc1344278e3c0c943c78#509f47988320446e9d15bc1344278e3c0c943c78"
+source = "git+https://github.com/RusticStack/coreutils?rev=2a7cb9334ab9bf7d70c694bf91f2886363f2d84f#2a7cb9334ab9bf7d70c694bf91f2886363f2d84f"
 dependencies = [
  "ariadne",
  "bstr",
@@ -1603,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "uucore_procs"
 version = "0.12.0"
-source = "git+https://github.com/RusticStack/coreutils?rev=509f47988320446e9d15bc1344278e3c0c943c78#509f47988320446e9d15bc1344278e3c0c943c78"
+source = "git+https://github.com/RusticStack/coreutils?rev=2a7cb9334ab9bf7d70c694bf91f2886363f2d84f#2a7cb9334ab9bf7d70c694bf91f2886363f2d84f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1738,7 +1738,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

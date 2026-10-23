@@ -27,9 +27,9 @@ mod common;
 /// How `find` names itself in errors.
 const PROGRAM: &str = "find";
 
-/// How uucore heads an expression report: argv[0]'s base name, which keeps the
-/// `.exe` on Windows.
-const REPORT_PROGRAM: &str = if cfg!(windows) { "find.exe" } else { "find" };
+/// How uucore heads an expression report: argv[0]'s base name (Skua: without
+/// `.exe` on Windows, see the uucore fork's util_name).
+const REPORT_PROGRAM: &str = "find";
 
 /// Returns a UCommand for `find` with the working directory set to the
 /// repository root, so that tests using relative `test_data/` paths work.
