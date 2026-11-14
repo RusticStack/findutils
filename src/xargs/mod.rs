@@ -408,6 +408,7 @@ enum ExecAction {
 
 struct CommandBuilderOptions {
     action: ExecAction,
+    #[cfg_attr(windows, allow(dead_code))]
     env: HashMap<OsString, OsString>,
     limiters: LimiterCollection,
     verbose: bool,
@@ -485,18 +486,16 @@ impl CommandBuilder<'_> {
                 })
                 .collect();
 
-            command
-                .args(&initial_args)
-                .env_clear()
-                .envs(&self.options.env);
+            command.args(&initial_args);
         } else {
             // don't do any replacement
-            command
-                .args(initial_args)
-                .args(&self.extra_args)
-                .env_clear()
-                .envs(&self.options.env);
+            command.args(initial_args).args(&self.extra_args);
         }
+        // Skua: the child gets the environment this process has. On Windows, handing std the
+        // whole environment as an explicit one makes it build, sort and encode a block of it for
+        // every command; inheriting it is the same environment without that work.
+        #[cfg(not(windows))]
+        command.env_clear().envs(&self.options.env);
 
         if self.options.close_stdin {
             command.stdin(Stdio::null());

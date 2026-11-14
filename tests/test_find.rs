@@ -37,6 +37,9 @@ fn ucmd() -> uutests::util::UCommand {
     let ts = TestScenario::new("find");
     let mut cmd = ts.cmd(env!("CARGO_BIN_EXE_find"));
     cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
+    // The executable spells paths with `/` unless told otherwise (Skua); most of these tests
+    // expect the platform's separator.
+    cmd.env("UUTILS_PATH_SEPARATOR", "native");
     cmd
 }
 
@@ -2491,6 +2494,32 @@ fn find_exits_cleanly_on_broken_pipe() {
         !stderr.contains("panicked"),
         "find panicked instead of exiting cleanly on a broken pipe:\n{stderr}"
     );
+}
+
+#[test]
+fn path_separator_is_a_slash_by_default() {
+    // Started by itself (the variable is not set), the executable prints `./a`, not `.\a`,
+    // as GNU find does in Git Bash.
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_find"));
+    let output = cmd
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env_remove("UUTILS_PATH_SEPARATOR")
+        .args(["test_data/depth/1", "-name", "f2"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        "test_data/depth/1/2/f2\n"
+    );
+}
+
+#[test]
+fn path_separator_native_prints_the_platform_separator() {
+    let expected = format!("test_data/depth/1{0}2{0}f2\n", std::path::MAIN_SEPARATOR);
+    ucmd()
+        .args(&["test_data/depth/1", "-name", "f2"])
+        .succeeds()
+        .stdout_only(expected);
 }
 
 #[test]
