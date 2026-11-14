@@ -23,10 +23,29 @@ impl DeleteMatcher {
     fn delete(&self, entry: &WalkEntry) -> io::Result<()> {
         if entry.file_type().is_dir() && !entry.path_is_symlink() {
             fs::remove_dir(entry.path())
+        } else if is_directory_link(entry) {
+            // Skua: on Windows a junction or a symbolic link to a directory is removed like a
+            // directory (only the link goes, never what it points to).
+            fs::remove_dir(entry.path())
         } else {
             fs::remove_file(entry.path())
         }
     }
+}
+
+/// A junction or a symbolic link whose own attributes say "directory" (Windows only).
+#[cfg(windows)]
+fn is_directory_link(entry: &WalkEntry) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    entry.path_is_symlink()
+        && fs::symlink_metadata(entry.path())
+            .is_ok_and(|metadata| metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0)
+}
+
+#[cfg(not(windows))]
+fn is_directory_link(_entry: &WalkEntry) -> bool {
+    false
 }
 
 impl Matcher for DeleteMatcher {
@@ -64,6 +83,32 @@ mod tests {
     use super::*;
     use crate::find::matchers::tests::get_dir_entry_for;
     use crate::find::tests::FakeDependencies;
+
+    #[cfg(windows)]
+    #[test]
+    fn delete_removes_a_junction_and_keeps_its_target() {
+        let matcher = DeleteMatcher::new();
+        let deps = FakeDependencies::new();
+        let temp_dir = Builder::new().prefix("test_junction").tempdir().unwrap();
+        let target = temp_dir.path().join("target");
+        create_dir(&target).unwrap();
+        File::create(target.join("keep")).unwrap();
+        let link = temp_dir.path().join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !made {
+            return;
+        }
+        let temp_dir_path = temp_dir.path().to_string_lossy();
+        let entry = get_dir_entry_for(&temp_dir_path, "link");
+        assert!(matcher.matches(&entry, &mut deps.new_matcher_io()));
+        assert!(!link.exists(), "the junction itself goes");
+        assert!(target.join("keep").exists(), "what it points to stays");
+    }
 
     #[test]
     fn delete_matcher() {
