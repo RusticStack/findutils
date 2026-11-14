@@ -24,6 +24,14 @@ impl DeleteMatcher {
         if entry.file_type().is_dir() && !entry.path_is_symlink() {
             fs::remove_dir(entry.path())
         } else if is_directory_link(entry) {
+            if entry.follow() {
+                // Skua: when -L (or -H on a root) followed a directory link, GNU find refuses to
+                // remove the link itself (`Not a directory`, exit 1).
+                return Err(io::Error::new(
+                    io::ErrorKind::NotADirectory,
+                    "Not a directory",
+                ));
+            }
             // Skua: on Windows a junction or a symbolic link to a directory is removed like a
             // directory (only the link goes, never what it points to).
             fs::remove_dir(entry.path())
@@ -110,6 +118,31 @@ mod tests {
         assert!(matcher.matches(&entry, &mut deps.new_matcher_io()));
         assert!(!link.exists(), "the junction itself goes");
         assert!(target.join("keep").exists(), "what it points to stays");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn delete_under_follow_refuses_to_remove_junction_and_sets_exit_1() {
+        let matcher = DeleteMatcher::new();
+        let deps = FakeDependencies::new();
+        let temp_dir = Builder::new().prefix("test_follow_junction").tempdir().unwrap();
+        let target = temp_dir.path().join("target");
+        create_dir(&target).unwrap();
+        let link = temp_dir.path().join("link");
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(&link)
+            .arg(&target)
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !made {
+            return;
+        }
+        let entry = WalkEntry::new(&link, 1, crate::find::matchers::Follow::Always);
+        let mut io = deps.new_matcher_io();
+        assert!(!matcher.matches(&entry, &mut io));
+        assert_eq!(io.exit_code(), 1);
+        assert!(link.exists(), "followed junction is not removed under -L");
     }
 
     #[test]

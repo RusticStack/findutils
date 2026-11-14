@@ -67,6 +67,7 @@ struct Argument {
     kind: ArgumentKind,
 }
 
+#[derive(Debug)]
 struct ExhaustedCommandSpace {
     arg: Argument,
     out_of_chars: bool,
@@ -592,25 +593,51 @@ impl Running {
         }
     }
 
+    fn has_failed(&self) -> bool {
+        self.failed.is_some()
+    }
+
     /// Runs the command now (without `-P`) or starts it, after waiting for a free slot.
-    fn run(
-        &mut self,
-        builder: CommandBuilder,
-        result: &mut CommandResult,
-    ) -> Result<(), CommandExecutionError> {
+    fn run(&mut self, builder: CommandBuilder, result: &mut CommandResult) {
         if self.limit <= 1 || matches!(builder.options.action, ExecAction::Echo) {
-            result.combine(builder.execute()?);
-            return Ok(());
+            match builder.execute() {
+                Ok(outcome) => result.combine(outcome),
+                Err(error) => {
+                    self.failed.get_or_insert(error);
+                }
+            }
+            return;
         }
+        self.reap_finished(result);
         if self.failed.is_some() {
-            // A command exited with 255: no more are started.
-            return Ok(());
+            // A command exited with 255 (or failed to spawn): no more are started.
+            return;
         }
         while self.children.len() >= self.limit {
             self.reap_one(result);
         }
-        self.children.push(builder.spawn()?);
-        Ok(())
+        if self.failed.is_some() {
+            return;
+        }
+        match builder.spawn() {
+            Ok(child) => self.children.push(child),
+            Err(error) => {
+                self.failed.get_or_insert(error);
+            }
+        }
+    }
+
+    /// Reaps any started commands that have already finished, without blocking.
+    fn reap_finished(&mut self, result: &mut CommandResult) {
+        let mut i = 0;
+        while i < self.children.len() {
+            if matches!(self.children[i].try_wait(), Ok(Some(_)) | Err(_)) {
+                let child = self.children.remove(i);
+                self.record_child(child, result);
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Waits for one command to end: one that already has, else the oldest.
@@ -620,7 +647,11 @@ impl Running {
             .iter_mut()
             .position(|child| matches!(child.try_wait(), Ok(Some(_)) | Err(_)))
             .unwrap_or(0);
-        let mut child = self.children.remove(done);
+        let child = self.children.remove(done);
+        self.record_child(child, result);
+    }
+
+    fn record_child(&mut self, mut child: Child, result: &mut CommandResult) {
         match child.wait().map_err(CommandExecutionError::CannotRun) {
             Ok(status) => match classify_status(status) {
                 Ok(outcome) => result.combine(outcome),
@@ -977,35 +1008,44 @@ fn process_input(
     let mut result = CommandResult::Success;
     let mut running = Running::new(options.max_procs);
 
-    while let Some(arg) = args.next()? {
-        if let Err(ExhaustedCommandSpace { arg, out_of_chars }) = current_builder.add_arg(arg) {
-            let mut next_builder = CommandBuilder::new(builder_options);
-            let arg_fits = next_builder.add_arg(arg).is_ok();
-            // -x exits without running the pending command: with -L or -n
-            // once the command is too long, otherwise only if the argument alone does not fit.
-            if out_of_chars
-                && options.exit_if_pass_char_limit
-                && (!arg_fits || options.max_args.is_some() || options.max_lines.is_some())
-            {
-                return Err(XargsError::ArgumentTooLarge);
-            }
-            if have_pending_command {
-                running.run(current_builder, &mut result)?;
+    let loop_result: Result<(), XargsError> = (|| {
+        while let Some(arg) = args.next()? {
+            if let Err(ExhaustedCommandSpace { arg, out_of_chars }) = current_builder.add_arg(arg) {
+                let mut next_builder = CommandBuilder::new(builder_options);
+                let arg_fits = next_builder.add_arg(arg).is_ok();
+                // -x exits without running the pending command: with -L or -n
+                // once the command is too long, otherwise only if the argument alone does not fit.
+                if out_of_chars
+                    && options.exit_if_pass_char_limit
+                    && (!arg_fits || options.max_args.is_some() || options.max_lines.is_some())
+                {
+                    return Err(XargsError::ArgumentTooLarge);
+                }
+                if have_pending_command {
+                    running.run(current_builder, &mut result);
+                    if running.has_failed() {
+                        return Ok(());
+                    }
+                }
+
+                if !arg_fits {
+                    return Err(XargsError::ArgumentTooLarge);
+                }
+                current_builder = next_builder;
             }
 
-            if !arg_fits {
-                return Err(XargsError::ArgumentTooLarge);
-            }
-            current_builder = next_builder;
+            have_pending_command = true;
         }
 
-        have_pending_command = true;
-    }
+        if (!options.no_run_if_empty || have_pending_command) && !running.has_failed() {
+            running.run(current_builder, &mut result);
+        }
+        Ok(())
+    })();
 
-    if !options.no_run_if_empty || have_pending_command {
-        running.run(current_builder, &mut result)?;
-    }
-    running.finish(&mut result)?;
+    let finish_result = running.finish(&mut result);
+    loop_result?;
+    finish_result?;
 
     Ok(result)
 }
@@ -1062,9 +1102,10 @@ fn normalize_options(options: Options, matches: &clap::ArgMatches) -> Options {
                 "WARNING: -L, -n and -I/-i are mutually exclusive, but more than one were given; \
                 only the last option will be used"
             );
-                let lines_index = matches
-                    .indices_of(options::MAX_LINES)
-                    .and_then(|mut v| v.next_back());
+                let lines_index = [options::MAX_LINES, options::MAX_LINES_L]
+                    .iter()
+                    .flat_map(|o| matches.indices_of(o).and_then(|mut v| v.next_back()))
+                    .max();
                 let args_index = matches
                     .indices_of(options::MAX_ARGS)
                     .and_then(|mut v| v.next_back());
@@ -1120,21 +1161,82 @@ fn normalize_options(options: Options, matches: &clap::ArgMatches) -> Options {
 
 /// Skua: `-l` takes its value only when attached (`-l5`), so `xargs -l echo` runs echo with one
 /// line at a time, as GNU xargs does; clap would take `echo` as the value.
-fn fix_optional_l<'a>(args: &[&'a str]) -> Vec<&'a str> {
-    const WITH_VALUE: [&str; 11] = [
-        "-a", "-d", "-E", "-e", "-I", "-L", "-n", "-P", "-s", "-R", "-S",
+fn fix_optional_l(args: &[&str]) -> Vec<String> {
+    const SHORT_WITH_VALUE: &str = "adEILnPsRS";
+    const LONG_WITH_VALUE: &[&str] = &[
+        "--arg-file",
+        "--delimiter",
+        "--eof",
+        "--max-args",
+        "--max-chars",
+        "--max-lines",
+        "--max-procs",
+        "--process-slot-var",
     ];
-    let mut fixed = args.to_vec();
+    let mut fixed = Vec::with_capacity(args.len() + 1);
+    if let Some(&prog) = args.first() {
+        fixed.push(prog.to_owned());
+    }
     let mut i = 1;
-    while i < fixed.len() {
-        let arg = fixed[i];
-        if arg == "--" || !arg.starts_with('-') {
+    while i < args.len() {
+        let arg = args[i];
+        if arg == "--" || !arg.starts_with('-') || arg == "-" {
+            fixed.extend(args[i..].iter().map(|s| (*s).to_owned()));
             break;
         }
-        if arg == "-l" {
-            fixed[i] = "-l1";
-        } else if WITH_VALUE.contains(&arg) {
+        if let Some(long) = arg.strip_prefix("--") {
+            fixed.push(arg.to_owned());
+            if !long.contains('=') && LONG_WITH_VALUE.contains(&arg) {
+                if let Some(&next) = args.get(i + 1) {
+                    if arg != "--eof" || !next.starts_with('-') {
+                        fixed.push(next.to_owned());
+                        i += 1;
+                    }
+                }
+            }
             i += 1;
+            continue;
+        }
+        let chars = &arg[1..];
+        if let Some(l_pos) = chars.find('l') {
+            let before_l = &chars[..l_pos];
+            let takes_attached_before = before_l
+                .chars()
+                .any(|c| SHORT_WITH_VALUE.contains(c) || c == 'e' || c == 'i');
+            if takes_attached_before {
+                fixed.push(arg.to_owned());
+            } else if chars[l_pos + 1..].is_empty() {
+                if before_l.is_empty() {
+                    fixed.push("-l1".to_owned());
+                } else {
+                    fixed.push(format!("-{before_l}"));
+                    fixed.push("-l1".to_owned());
+                }
+            } else {
+                fixed.push(arg.to_owned());
+            }
+            i += 1;
+            continue;
+        }
+        fixed.push(arg.to_owned());
+        let mut chars_iter = chars.chars();
+        let mut consumes_next = false;
+        while let Some(c) = chars_iter.next() {
+            if SHORT_WITH_VALUE.contains(c) || c == 'e' {
+                consumes_next = chars_iter.as_str().is_empty();
+                break;
+            }
+            if c == 'i' {
+                break;
+            }
+        }
+        if consumes_next {
+            if let Some(&next) = args.get(i + 1) {
+                if arg != "-e" || !next.starts_with('-') {
+                    fixed.push(next.to_owned());
+                    i += 1;
+                }
+            }
         }
         i += 1;
     }
@@ -1897,5 +1999,118 @@ mod tests {
         assert!(parse_delimiter("\\x").is_err());
         assert!(parse_delimiter("\\").is_err());
         assert!(parse_delimiter("abc").is_err());
+    }
+
+    #[test]
+    fn test_fix_optional_l() {
+        let fix = fix_optional_l;
+        assert_eq!(fix(&["xargs", "-l", "echo"]), ["xargs", "-l1", "echo"]);
+        assert_eq!(
+            fix(&["xargs", "--max-procs", "2", "-l", "echo"]),
+            ["xargs", "--max-procs", "2", "-l1", "echo"]
+        );
+        assert_eq!(
+            fix(&["xargs", "--max-args", "1", "-l", "echo"]),
+            ["xargs", "--max-args", "1", "-l1", "echo"]
+        );
+        assert_eq!(
+            fix(&["xargs", "--delimiter", "x", "-l", "echo"]),
+            ["xargs", "--delimiter", "x", "-l1", "echo"]
+        );
+        assert_eq!(
+            fix(&["xargs", "--eof", "END", "-l", "echo"]),
+            ["xargs", "--eof", "END", "-l1", "echo"]
+        );
+        assert_eq!(
+            fix(&["xargs", "-rl", "echo"]),
+            ["xargs", "-r", "-l1", "echo"]
+        );
+        assert_eq!(
+            fix(&["xargs", "-rP", "4", "-l5", "echo"]),
+            ["xargs", "-rP", "4", "-l5", "echo"]
+        );
+        assert_eq!(
+            fix(&["xargs", "-Ilabel", "-l", "echo"]),
+            ["xargs", "-Ilabel", "-l1", "echo"]
+        );
+    }
+
+    #[test]
+    fn test_running_waits_for_children_on_spawn_error() {
+        let mut cmd_args = if cfg!(windows) {
+            vec![OsString::from("cmd"), OsString::from("/C"), OsString::from("exit 0")]
+        } else {
+            vec![OsString::from("true")]
+        };
+        let opts_ok = CommandBuilderOptions::new(
+            ExecAction::Command(std::mem::take(&mut cmd_args)),
+            HashMap::new(),
+            LimiterCollection::new(),
+            None,
+        )
+        .unwrap();
+        let opts_missing = CommandBuilderOptions::new(
+            ExecAction::Command(vec![OsString::from(
+                "definitely_nonexistent_xargs_cmd_12345",
+            )]),
+            HashMap::new(),
+            LimiterCollection::new(),
+            None,
+        )
+        .unwrap();
+
+        let mut running = Running::new(4);
+        let mut result = CommandResult::Success;
+        running.run(CommandBuilder::new(&opts_ok), &mut result);
+        assert_eq!(running.children.len(), 1);
+        running.run(CommandBuilder::new(&opts_missing), &mut result);
+        // Spawn error must be recorded without leaving the started child orphaned.
+        assert!(running.has_failed());
+        let err = running.finish(&mut result).unwrap_err();
+        assert!(matches!(err, CommandExecutionError::NotFound(_)));
+        assert!(running.children.is_empty());
+    }
+
+    #[test]
+    fn test_running_stops_on_255_with_free_slots() {
+        let exit_255_args = if cfg!(windows) {
+            vec![OsString::from("cmd"), OsString::from("/C"), OsString::from("exit 255")]
+        } else {
+            vec![OsString::from("sh"), OsString::from("-c"), OsString::from("exit 255")]
+        };
+        let opts_255 = CommandBuilderOptions::new(
+            ExecAction::Command(exit_255_args),
+            HashMap::new(),
+            LimiterCollection::new(),
+            None,
+        )
+        .unwrap();
+        let ok_args = if cfg!(windows) {
+            vec![OsString::from("cmd"), OsString::from("/C"), OsString::from("exit 0")]
+        } else {
+            vec![OsString::from("true")]
+        };
+        let opts_ok = CommandBuilderOptions::new(
+            ExecAction::Command(ok_args),
+            HashMap::new(),
+            LimiterCollection::new(),
+            None,
+        )
+        .unwrap();
+
+        let mut running = Running::new(4);
+        let mut result = CommandResult::Success;
+        running.run(CommandBuilder::new(&opts_255), &mut result);
+        assert_eq!(running.children.len(), 1);
+        // Wait for child 1 to exit 255 while 3 slots remain free.
+        while running.children[0].try_wait().unwrap().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        // Even with 3 free slots, run() must reap child 1 and refuse to spawn another.
+        running.run(CommandBuilder::new(&opts_ok), &mut result);
+        assert!(running.has_failed());
+        assert!(running.children.is_empty());
+        let err = running.finish(&mut result).unwrap_err();
+        assert!(matches!(err, CommandExecutionError::UrgentlyFailed));
     }
 }

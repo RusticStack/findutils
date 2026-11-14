@@ -798,3 +798,64 @@ fn xargs_small_l_does_not_take_the_command_as_its_value() {
         .succeeds();
     assert_eq!(result.stdout_str().lines().count(), 12);
 }
+
+#[test]
+fn xargs_small_l_after_long_value_option_and_grouped_short() {
+    for flags in [
+        &["--max-procs", "2", "-l"][..],
+        &["--max-chars", "100", "-l"][..],
+        &["-rl"][..],
+    ] {
+        ucmd()
+            .args(flags)
+            .arg(&path_to_testing_commandline())
+            .args(&["-", "--no_print_cwd"])
+            .pipe_in("a b\nc\n")
+            .succeeds()
+            .stdout_only(
+                "args=\n--no_print_cwd\na\nb\n\
+                 args=\n--no_print_cwd\nc\n",
+            );
+    }
+    ucmd()
+        .args(&["--delimiter", "\\n", "-l"])
+        .arg(&path_to_testing_commandline())
+        .args(&["-", "--no_print_cwd"])
+        .pipe_in("a b\nc\n")
+        .succeeds()
+        .stdout_only(
+            "args=\n--no_print_cwd\na b\n\
+             args=\n--no_print_cwd\nc\n",
+        );
+    // `-n` and `-l` emit the mutual-exclusion warning; `-l` wins because it comes last.
+    ucmd()
+        .args(&["--max-args", "1", "-l"])
+        .arg(&path_to_testing_commandline())
+        .args(&["-", "--no_print_cwd"])
+        .pipe_in("a b\nc\n")
+        .succeeds()
+        .stderr_contains("WARNING")
+        .stdout_is(
+            "args=\n--no_print_cwd\na\nb\n\
+             args=\n--no_print_cwd\nc\n",
+        );
+}
+
+#[test]
+fn xargs_max_procs_stops_on_255_even_with_free_slots() {
+    // With -P 4 and children exiting 255, xargs must exit 124 and report exit 255.
+    ucmd()
+        .args(&[
+            "-n",
+            "1",
+            "-P",
+            "4",
+            &path_to_testing_commandline(),
+            "-",
+            "--no_print_cwd",
+            "--exit_with_urgent_failure",
+        ])
+        .pipe_in("a b c d e f")
+        .fails_with_code(124)
+        .stderr_contains("Command exited with code 255");
+}
