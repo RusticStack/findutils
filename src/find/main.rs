@@ -20,6 +20,7 @@ fn main() {
     // This is to solve the problem that when find is used with a pipe character,
     // the downstream software of the standard output stream closes the pipe and triggers a panic.
     uucore::panic::mute_sigpipe_panic();
+    findutils::find::matchers::spell_paths_with_forward_slashes_by_default();
 
     let args = match collect_utf8_args(std::env::args_os()) {
         Ok(args) => args,

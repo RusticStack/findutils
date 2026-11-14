@@ -77,7 +77,7 @@ use uucore::error::strip_errno;
 use super::error::{self, ParseError};
 use super::{Config, Dependencies};
 
-pub use entry::{FileType, WalkEntry, WalkError};
+pub use entry::{spell_paths_with_forward_slashes_by_default, FileType, WalkEntry, WalkError};
 pub use regex::RegexType;
 
 /// Symlink following mode.

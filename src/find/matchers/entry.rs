@@ -222,9 +222,24 @@ pub struct WalkEntry {
 #[cfg(windows)]
 fn forward_slashes() -> bool {
     static FORWARD: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *FORWARD.get_or_init(|| {
-        std::env::var_os("UUTILS_PATH_SEPARATOR").is_some_and(|v| v == "/" || v == "slash")
+    *FORWARD.get_or_init(|| match std::env::var_os("UUTILS_PATH_SEPARATOR") {
+        Some(v) => v == "/" || v == "slash",
+        None => FORWARD_BY_DEFAULT.load(std::sync::atomic::Ordering::Relaxed),
     })
+}
+
+/// Skua: whether paths are spelled with `/` when `UUTILS_PATH_SEPARATOR` is not set. Off for the
+/// library and its tests; the `find` executable turns it on, so that started by itself (not
+/// from Skua Bash, which sets the variable) it prints `./a.txt` as GNU find does under Git Bash.
+/// Any other value of the variable than `/` and `slash` still asks for the native separator.
+#[cfg(windows)]
+static FORWARD_BY_DEFAULT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Call before the first path is printed: see `FORWARD_BY_DEFAULT`.
+pub fn spell_paths_with_forward_slashes_by_default() {
+    #[cfg(windows)]
+    FORWARD_BY_DEFAULT.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// `path` with `/` for every separator, when `UUTILS_PATH_SEPARATOR=/` asks
