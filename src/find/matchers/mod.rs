@@ -213,8 +213,9 @@ impl StdoutErrors {
     pub(crate) fn handle(&self, error: &std::io::Error, matcher_io: &mut MatcherIO) {
         if error.kind() == std::io::ErrorKind::BrokenPipe {
             // Skua patch: Windows has no SIGPIPE; exit as bash reports a SIGPIPE death
-            // (141), like GNU find under Git Bash.
-            if cfg!(windows) {
+            // (141), like GNU find under Git Bash. Not in unit tests, which check the
+            // upstream bookkeeping below.
+            if cfg!(all(windows, not(test))) {
                 std::process::exit(141);
             }
             matcher_io.quit();
