@@ -77,7 +77,9 @@ use uucore::error::strip_errno;
 use super::error::{self, ParseError};
 use super::{Config, Dependencies};
 
-pub use entry::{spell_paths_with_forward_slashes_by_default, FileType, WalkEntry, WalkError};
+pub use entry::{
+    slashes_wanted, spell_paths_with_forward_slashes_by_default, FileType, WalkEntry, WalkError,
+};
 pub use regex::RegexType;
 
 /// Symlink following mode.
@@ -541,6 +543,7 @@ enum Predicate {
     Follow,
     DayStart,
     NoLeaf,
+    IgnoreReaddirRace,
     Depth,
     Mount,
     Sorted,
@@ -622,6 +625,8 @@ const PREDICATES: &[(&str, Predicate)] = &[
     ("-follow", Predicate::Follow),
     ("-daystart", Predicate::DayStart),
     ("-noleaf", Predicate::NoLeaf),
+    ("-ignore_readdir_race", Predicate::IgnoreReaddirRace),
+    ("-noignore_readdir_race", Predicate::IgnoreReaddirRace),
     ("-d", Predicate::Depth),
     ("-depth", Predicate::Depth),
     ("-mount", Predicate::Mount),
@@ -1158,6 +1163,11 @@ fn build_matcher_tree(
             }
             Predicate::DayStart => {
                 config.today_start = true;
+                Some(TrueMatcher.into_box())
+            }
+            Predicate::IgnoreReaddirRace => {
+                // Skua: accepted, nothing to ignore: an entry that goes away while reading is
+                // reported by the walker as before.
                 Some(TrueMatcher.into_box())
             }
             Predicate::NoLeaf => {

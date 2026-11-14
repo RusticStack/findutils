@@ -2514,6 +2514,40 @@ fn path_separator_is_a_slash_by_default() {
 }
 
 #[test]
+fn execdir_names_the_file_with_a_slash_by_default() {
+    // The file is named ./f0, as GNU find does, not .\f0.
+    let find = env!("CARGO_BIN_EXE_find");
+    let output = std::process::Command::new(find)
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .env_remove("UUTILS_PATH_SEPARATOR")
+        .args(["test_data/depth", "-type", "f", "-name", "f0"])
+        .args(["-execdir", find, "{}", "-maxdepth", "0", ";"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).replace("\r\n", "\n"),
+        "./f0\n"
+    );
+}
+
+#[test]
+fn ignore_readdir_race_is_accepted() {
+    ucmd()
+        .args(&["test_data/depth", "-ignore_readdir_race", "-maxdepth", "0"])
+        .succeeds()
+        .stdout_only("test_data/depth\n");
+    ucmd()
+        .args(&[
+            "test_data/depth",
+            "-noignore_readdir_race",
+            "-maxdepth",
+            "0",
+        ])
+        .succeeds()
+        .stdout_only("test_data/depth\n");
+}
+
+#[test]
 fn path_separator_native_prints_the_platform_separator() {
     let expected = format!("test_data/depth/1{0}2{0}f2\n", std::path::MAIN_SEPARATOR);
     ucmd()

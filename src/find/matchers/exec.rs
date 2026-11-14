@@ -9,7 +9,7 @@ use std::cell::RefCell;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use super::{Matcher, MatcherIO, WalkEntry};
@@ -100,13 +100,24 @@ impl SingleExecMatcher {
     }
 }
 
+/// `./name`, spelled with `/` or the native separator as the paths of the other predicates.
+fn dot_join(name: &OsStr) -> PathBuf {
+    if super::slashes_wanted() {
+        let mut path = OsString::from("./");
+        path.push(name);
+        PathBuf::from(path)
+    } else {
+        Path::new(".").join(name)
+    }
+}
+
 impl Matcher for SingleExecMatcher {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         let path_to_file = if self.exec_in_parent_dir {
             if let Some(f) = file_info.path().file_name() {
-                Path::new(".").join(f)
+                dot_join(f.as_ref())
             } else {
-                Path::new(".").join(file_info.path())
+                dot_join(file_info.path().as_os_str())
             }
         } else {
             file_info.path().to_path_buf()
@@ -229,9 +240,9 @@ impl Matcher for MultiExecMatcher {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         let path_to_file = if self.exec_in_parent_dir {
             if let Some(f) = file_info.path().file_name() {
-                Path::new(".").join(f)
+                dot_join(f.as_ref())
             } else {
-                Path::new(".").join(file_info.path())
+                dot_join(file_info.path().as_os_str())
             }
         } else {
             file_info.path().to_path_buf()

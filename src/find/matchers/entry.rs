@@ -262,6 +262,17 @@ fn respell(_path: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Whether paths are spelled with `/` (see `forward_slashes`); always false off Windows.
+#[cfg(windows)]
+pub fn slashes_wanted() -> bool {
+    forward_slashes()
+}
+
+#[cfg(not(windows))]
+pub fn slashes_wanted() -> bool {
+    false
+}
+
 impl WalkEntry {
     /// Create a new WalkEntry for a specific file.
     pub fn new(path: impl Into<PathBuf>, depth: usize, follow: Follow) -> Self {
