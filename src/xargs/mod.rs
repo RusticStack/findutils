@@ -11,7 +11,7 @@ use std::{
     fmt::Display,
     fs,
     io::{self, BufRead, BufReader, Read},
-    process::{Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
 };
 
 use clap::{crate_version, error::ErrorKind, Arg, ArgAction};
@@ -466,7 +466,8 @@ impl CommandBuilder<'_> {
         Ok(())
     }
 
-    fn execute(self) -> Result<CommandResult, CommandExecutionError> {
+    /// The command to run with the arguments collected so far.
+    fn build_command(&self) -> Command {
         let (entry_point, initial_args): (&OsStr, &[OsString]) = match &self.options.action {
             ExecAction::Command(args) => (&args[0], &args[1..]),
             ExecAction::Echo => (OsStr::new("echo"), &[]),
@@ -504,43 +505,16 @@ impl CommandBuilder<'_> {
         if self.options.verbose {
             eprintln!("{command:?}");
         }
+        command
+    }
+
+    fn execute(self) -> Result<CommandResult, CommandExecutionError> {
+        let mut command = self.build_command();
 
         match &self.options.action {
             ExecAction::Command(_) => match command.status() {
-                Ok(status) => {
-                    if status.success() {
-                        Ok(CommandResult::Success)
-                    } else if let Some(err) = status.code() {
-                        if cfg!(windows) && err == 141 {
-                            // Skua patch: the bundled tools exit 141 where Unix would kill them
-                            // with SIGPIPE; stop as GNU xargs does for a signal death.
-                            Err(CommandExecutionError::Killed { signal: 13 })
-                        } else if err == 255 {
-                            Err(CommandExecutionError::UrgentlyFailed)
-                        } else {
-                            Ok(CommandResult::Failure)
-                        }
-                    } else {
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::process::ExitStatusExt;
-                            if let Some(signal) = status.signal() {
-                                Err(CommandExecutionError::Killed { signal })
-                            } else {
-                                Err(CommandExecutionError::Unknown)
-                            }
-                        }
-
-                        #[cfg(not(unix))]
-                        Err(CommandExecutionError::Unknown)
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                    Err(CommandExecutionError::NotFound(
-                        command.get_program().to_string_lossy().into_owned(),
-                    ))
-                }
-                Err(e) => Err(CommandExecutionError::CannotRun(e)),
+                Ok(status) => classify_status(status),
+                Err(e) => Err(spawn_error(&command, e)),
             },
             ExecAction::Echo => {
                 println!(
@@ -554,6 +528,118 @@ impl CommandBuilder<'_> {
                 Ok(CommandResult::Success)
             }
         }
+    }
+
+    /// Skua: starts the command without waiting for it (`-P`).
+    fn spawn(self) -> Result<Child, CommandExecutionError> {
+        let mut command = self.build_command();
+        command.spawn().map_err(|e| spawn_error(&command, e))
+    }
+}
+
+/// What the exit status of a command means for xargs.
+fn classify_status(status: ExitStatus) -> Result<CommandResult, CommandExecutionError> {
+    if status.success() {
+        Ok(CommandResult::Success)
+    } else if let Some(err) = status.code() {
+        if cfg!(windows) && err == 141 {
+            // Skua patch: the bundled tools exit 141 where Unix would kill them
+            // with SIGPIPE; stop as GNU xargs does for a signal death.
+            Err(CommandExecutionError::Killed { signal: 13 })
+        } else if err == 255 {
+            Err(CommandExecutionError::UrgentlyFailed)
+        } else {
+            Ok(CommandResult::Failure)
+        }
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::ExitStatusExt;
+            if let Some(signal) = status.signal() {
+                Err(CommandExecutionError::Killed { signal })
+            } else {
+                Err(CommandExecutionError::Unknown)
+            }
+        }
+
+        #[cfg(not(unix))]
+        Err(CommandExecutionError::Unknown)
+    }
+}
+
+fn spawn_error(command: &Command, e: io::Error) -> CommandExecutionError {
+    if e.kind() == io::ErrorKind::NotFound {
+        CommandExecutionError::NotFound(command.get_program().to_string_lossy().into_owned())
+    } else {
+        CommandExecutionError::CannotRun(e)
+    }
+}
+
+/// Skua: the commands started by `-P N` that are still running.
+struct Running {
+    limit: usize,
+    children: Vec<Child>,
+    /// The first error of a command, reported after the others have ended.
+    failed: Option<CommandExecutionError>,
+}
+
+impl Running {
+    fn new(limit: usize) -> Self {
+        Self {
+            limit,
+            children: Vec::new(),
+            failed: None,
+        }
+    }
+
+    /// Runs the command now (without `-P`) or starts it, after waiting for a free slot.
+    fn run(
+        &mut self,
+        builder: CommandBuilder,
+        result: &mut CommandResult,
+    ) -> Result<(), CommandExecutionError> {
+        if self.limit <= 1 || matches!(builder.options.action, ExecAction::Echo) {
+            result.combine(builder.execute()?);
+            return Ok(());
+        }
+        if self.failed.is_some() {
+            // A command exited with 255: no more are started.
+            return Ok(());
+        }
+        while self.children.len() >= self.limit {
+            self.reap_one(result);
+        }
+        self.children.push(builder.spawn()?);
+        Ok(())
+    }
+
+    /// Waits for one command to end: one that already has, else the oldest.
+    fn reap_one(&mut self, result: &mut CommandResult) {
+        let done = self
+            .children
+            .iter_mut()
+            .position(|child| matches!(child.try_wait(), Ok(Some(_)) | Err(_)))
+            .unwrap_or(0);
+        let mut child = self.children.remove(done);
+        match child.wait().map_err(CommandExecutionError::CannotRun) {
+            Ok(status) => match classify_status(status) {
+                Ok(outcome) => result.combine(outcome),
+                Err(error) => {
+                    self.failed.get_or_insert(error);
+                }
+            },
+            Err(error) => {
+                self.failed.get_or_insert(error);
+            }
+        }
+    }
+
+    /// Waits for every command that was started, then reports the first error.
+    fn finish(&mut self, result: &mut CommandResult) -> Result<(), CommandExecutionError> {
+        while !self.children.is_empty() {
+            self.reap_one(result);
+        }
+        self.failed.take().map_or(Ok(()), Err)
     }
 }
 
@@ -860,6 +946,7 @@ struct InputProcessOptions {
     max_args: Option<usize>,
     max_lines: Option<usize>,
     no_run_if_empty: bool,
+    max_procs: usize,
 }
 
 impl InputProcessOptions {
@@ -868,12 +955,14 @@ impl InputProcessOptions {
         max_args: Option<usize>,
         max_lines: Option<usize>,
         no_run_if_empty: bool,
+        max_procs: usize,
     ) -> Self {
         Self {
             exit_if_pass_char_limit,
             max_args,
             max_lines,
             no_run_if_empty,
+            max_procs,
         }
     }
 }
@@ -886,6 +975,7 @@ fn process_input(
     let mut current_builder = CommandBuilder::new(builder_options);
     let mut have_pending_command = false;
     let mut result = CommandResult::Success;
+    let mut running = Running::new(options.max_procs);
 
     while let Some(arg) = args.next()? {
         if let Err(ExhaustedCommandSpace { arg, out_of_chars }) = current_builder.add_arg(arg) {
@@ -900,7 +990,7 @@ fn process_input(
                 return Err(XargsError::ArgumentTooLarge);
             }
             if have_pending_command {
-                result.combine(current_builder.execute()?);
+                running.run(current_builder, &mut result)?;
             }
 
             if !arg_fits {
@@ -913,8 +1003,9 @@ fn process_input(
     }
 
     if !options.no_run_if_empty || have_pending_command {
-        result.combine(current_builder.execute()?);
+        running.run(current_builder, &mut result)?;
     }
+    running.finish(&mut result)?;
 
     Ok(result)
 }
@@ -1027,6 +1118,29 @@ fn normalize_options(options: Options, matches: &clap::ArgMatches) -> Options {
     }
 }
 
+/// Skua: `-l` takes its value only when attached (`-l5`), so `xargs -l echo` runs echo with one
+/// line at a time, as GNU xargs does; clap would take `echo` as the value.
+fn fix_optional_l<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    const WITH_VALUE: [&str; 11] = [
+        "-a", "-d", "-E", "-e", "-I", "-L", "-n", "-P", "-s", "-R", "-S",
+    ];
+    let mut fixed = args.to_vec();
+    let mut i = 1;
+    while i < fixed.len() {
+        let arg = fixed[i];
+        if arg == "--" || !arg.starts_with('-') {
+            break;
+        }
+        if arg == "-l" {
+            fixed[i] = "-l1";
+        } else if WITH_VALUE.contains(&arg) {
+            i += 1;
+        }
+        i += 1;
+    }
+    fixed
+}
+
 fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
     let matches = clap::Command::new("xargs")
         // Skua: `Usage: xargs ...`, not the `xargs.exe` of argv[0] on Windows.
@@ -1098,7 +1212,7 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
             Arg::new(options::MAX_PROCS)
                 .short('P')
                 .long(options::MAX_PROCS)
-                .help("Run up to this many commands in parallel [NOT IMPLEMENTED]")
+                .help("Run up to this many commands in parallel (0: as many as sensible)")
                 .value_parser(clap::value_parser!(usize)),
         )
         .arg(
@@ -1179,7 +1293,7 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
                 .overrides_with(options::EOF)
                 .value_parser(clap::value_parser!(String)),
         )
-        .try_get_matches_from(args);
+        .try_get_matches_from(fix_optional_l(args));
 
     let matches = match matches {
         Ok(m) => m,
@@ -1231,6 +1345,13 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
     };
 
     let options = normalize_options(options, &matches);
+    // Skua: -P N runs up to N commands at a time; 0 means as many as the machine has cores
+    // times four, at most 64.
+    let max_procs = match matches.get_one::<usize>(options::MAX_PROCS).copied() {
+        None => 1,
+        Some(0) => std::thread::available_parallelism().map_or(8, |n| (n.get() * 4).min(64)),
+        Some(n) => n.min(256),
+    };
 
     let action = match matches.get_many::<OsString>(options::COMMAND) {
         Some(args) if args.len() > 0 => {
@@ -1291,6 +1412,7 @@ fn do_xargs(args: &[&str]) -> Result<CommandResult, XargsError> {
             options.max_args,
             options.max_lines,
             options.no_run_if_empty || options.replace.is_some(),
+            max_procs,
         ),
     )?;
     Ok(result)

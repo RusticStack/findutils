@@ -743,3 +743,58 @@ fn xargs_replace_unterminated_quote() {
         .stderr_contains("xargs: Unterminated quote:")
         .no_stdout();
 }
+
+// Skua: -P runs several commands at a time; the output of all of them is there. The command is
+// `find -P`, which takes the paths xargs appends.
+const PATH_WITH_ONE_FILE: &str = "test_data/depth/1/2";
+
+fn xargs_find() -> uutests::util::UCommand {
+    let mut cmd = ucmd();
+    cmd.current_dir(env!("CARGO_MANIFEST_DIR"));
+    cmd
+}
+
+#[test]
+fn xargs_max_procs_runs_every_command() {
+    let find = env!("CARGO_BIN_EXE_find");
+    let result = xargs_find()
+        .args(&["-n", "1", "-P", "3", find, "-P"])
+        .pipe_in([PATH_WITH_ONE_FILE; 5].join(" "))
+        .succeeds();
+    // The four entries of that directory, for each of the five commands.
+    assert_eq!(result.stdout_str().lines().count(), 20);
+}
+
+#[test]
+fn xargs_max_procs_reports_a_failed_command() {
+    let find = env!("CARGO_BIN_EXE_find");
+    xargs_find()
+        .args(&["-n", "1", "-P", "2", find, "-P"])
+        .pipe_in(format!(
+            "{PATH_WITH_ONE_FILE} no_such_path_for_xargs {PATH_WITH_ONE_FILE}"
+        ))
+        .fails_with_code(123);
+}
+
+#[test]
+fn xargs_max_procs_zero_means_many() {
+    let find = env!("CARGO_BIN_EXE_find");
+    let result = xargs_find()
+        .args(&["-n", "1", "-P", "0", find, "-P"])
+        .pipe_in([PATH_WITH_ONE_FILE; 3].join(" "))
+        .succeeds();
+    assert_eq!(result.stdout_str().lines().count(), 12);
+}
+
+// Skua: `-l` takes a value only when attached, so a command after it stays a command.
+#[test]
+fn xargs_small_l_does_not_take_the_command_as_its_value() {
+    let find = env!("CARGO_BIN_EXE_find");
+    let result = xargs_find()
+        .args(&["-l", find, "-P"])
+        .pipe_in(format!(
+            "{PATH_WITH_ONE_FILE} {PATH_WITH_ONE_FILE}\n{PATH_WITH_ONE_FILE}\n"
+        ))
+        .succeeds();
+    assert_eq!(result.stdout_str().lines().count(), 12);
+}
