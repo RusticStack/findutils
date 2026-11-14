@@ -4,10 +4,11 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use crate::find::out::stderr;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fs::{self, File};
-use std::io::{stderr, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -190,7 +191,7 @@ impl FormatStringParser<'_> {
         const OCTAL_RADIX: u32 = 8;
 
         if self.string.is_empty() {
-            eprintln!(
+            crate::find::out::eprintln_flushed!(
                 "{}: warning: escape `\\' followed by nothing at all",
                 crate::find::program_name()
             );
@@ -231,7 +232,7 @@ impl FormatStringParser<'_> {
                 '0' => "\0",
                 '\\' => "\\",
                 c => {
-                    eprintln!(
+                    crate::find::out::eprintln_flushed!(
                         "{}: warning: unrecognized escape '\\{c}'",
                         crate::find::program_name()
                     );
@@ -375,7 +376,7 @@ impl FormatStringParser<'_> {
             'Y' => FormatDirective::Type { follow_links: true },
             // TODO: %Z
             _ => {
-                eprintln!(
+                crate::find::out::eprintln_flushed!(
                     "{}: warning: unrecognized format directive '%{first}'",
                     crate::find::program_name()
                 );
@@ -806,7 +807,7 @@ impl Printf {
                         }
                     }
                     Err(e) => {
-                        eprintln!(
+                        crate::find::out::eprintln_flushed!(
                             "Error processing '{}': {}",
                             file_info.path().to_string_lossy(),
                             e
@@ -845,6 +846,8 @@ impl Printf {
 impl Matcher for Printf {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         let result = if let Some((file, _)) = &self.output_file {
+            // Skua: the file may be /dev/stderr.
+            crate::find::out::flush_pending();
             self.print(file_info, file)
         } else {
             self.print(file_info, &mut *matcher_io.deps.get_output().borrow_mut())

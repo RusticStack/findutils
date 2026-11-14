@@ -3,11 +3,9 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
+use crate::find::out::stderr;
 use chrono::DateTime;
-use std::{
-    fs::File,
-    io::{stderr, Write},
-};
+use std::{fs::File, io::Write};
 
 use super::{Matcher, MatcherIO, StdoutErrors, WalkEntry};
 
@@ -204,6 +202,8 @@ impl Ls {
 impl Matcher for Ls {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if let Some(file) = &self.output_file {
+            // Skua: the file may be /dev/stderr.
+            crate::find::out::flush_pending();
             self.print(file_info, matcher_io, file, true);
         } else {
             self.print(

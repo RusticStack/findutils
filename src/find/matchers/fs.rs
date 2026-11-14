@@ -26,11 +26,9 @@ pub struct Cache {
 ///
 /// This is only supported on Unix.
 #[cfg(unix)]
-use std::{
-    cell::RefCell,
-    io::{stderr, Write},
-    path::Path,
-};
+use crate::find::out::stderr;
+#[cfg(unix)]
+use std::{cell::RefCell, io::Write, path::Path};
 
 #[cfg(unix)]
 pub fn get_file_system_type(path: &Path, cache: &RefCell<Option<Cache>>) -> UResult<String> {

@@ -8,8 +8,9 @@
 //! be tricky to both implement and use on a windows platform. So we don't
 //! even try.
 
+use crate::find::out::stderr;
 use std::error::Error;
-use std::io::{stderr, Write};
+use std::io::Write;
 #[cfg(unix)]
 use uucore::mode::{parse_numeric, parse_symbolic};
 

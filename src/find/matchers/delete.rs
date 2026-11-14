@@ -7,8 +7,9 @@
  * file that was distributed with this source code.
  */
 
+use crate::find::out::stderr;
 use std::fs;
-use std::io::{self, stderr, Write};
+use std::io::{self, Write};
 
 use super::{Matcher, MatcherIO, WalkEntry};
 

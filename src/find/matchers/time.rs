@@ -4,9 +4,10 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use crate::find::out::stderr;
 use std::error::Error;
 use std::fs::{self, Metadata};
-use std::io::{stderr, Write};
+use std::io::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Local, Timelike};

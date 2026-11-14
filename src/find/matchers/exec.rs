@@ -4,10 +4,11 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use crate::find::out::stderr;
 use std::cell::RefCell;
 use std::error::Error;
 use std::ffi::{OsStr, OsString};
-use std::io::{stderr, Write};
+use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
@@ -155,6 +156,8 @@ impl Matcher for SingleExecMatcher {
                 }
             }
         }
+        // Skua: the child writes to the same standard output.
+        crate::find::out::flush_pending();
         match command.status() {
             Ok(status) => status.success(),
             Err(e) => {
@@ -206,6 +209,8 @@ impl MultiExecMatcher {
     }
 
     fn run_command(&self, command: &mut argmax::Command, matcher_io: &mut MatcherIO) {
+        // Skua: the child writes to the same standard output.
+        crate::find::out::flush_pending();
         match command.status() {
             Ok(status) => {
                 if !status.success() {

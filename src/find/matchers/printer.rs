@@ -4,8 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use crate::find::out::stderr;
 use std::fs::File;
-use std::io::{stderr, Write};
+use std::io::Write;
 
 use super::{Matcher, MatcherIO, StdoutErrors, WalkEntry};
 
@@ -45,12 +46,26 @@ impl Printer {
     }
 
     fn print(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO, mut out: impl Write) {
-        let result = write!(
-            out,
-            "{}{}",
-            file_info.path().to_string_lossy(),
-            self.delimiter
-        )
+        let result = if self.output_file.is_some() {
+            write!(
+                out,
+                "{}{}",
+                file_info.path().to_string_lossy(),
+                self.delimiter
+            )
+        } else {
+            // Skua: no formatting machinery for the common case, the name's bytes as they are.
+            let path = file_info.path();
+            let delimiter: &[u8] = match self.delimiter {
+                PrintDelimiter::Newline => b"\n",
+                PrintDelimiter::Null => b"\0",
+            };
+            match path.to_str() {
+                Some(name) => out.write_all(name.as_bytes()),
+                None => out.write_all(path.to_string_lossy().as_bytes()),
+            }
+            .and_then(|()| out.write_all(delimiter))
+        }
         .and_then(|()| out.flush());
         if let Err(e) = result {
             if self.output_file.is_none() {
@@ -77,6 +92,8 @@ impl Printer {
 impl Matcher for Printer {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if let Some(file) = &self.output_file {
+            // Skua: the file may be /dev/stderr.
+            crate::find::out::flush_pending();
             self.print(file_info, matcher_io, file);
         } else {
             self.print(

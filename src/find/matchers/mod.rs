@@ -58,6 +58,7 @@ use self::time::{
 };
 use self::type_matcher::{TypeMatcher, XtypeMatcher};
 use self::user::{NoUserMatcher, UserMatcher};
+use crate::find::out::stderr;
 use ::regex::Regex;
 use fs::FileSystemMatcher;
 use ls::Ls;
@@ -65,7 +66,7 @@ use std::{
     cell::Cell,
     error::Error,
     fs::{File, Metadata},
-    io::{stderr, Write},
+    io::Write,
     path::{Path, PathBuf},
     rc::Rc,
     str::FromStr,

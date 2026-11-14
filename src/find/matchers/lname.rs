@@ -4,7 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use std::io::{stderr, Write};
+use crate::find::out::stderr;
+use std::io::Write;
 use std::path::PathBuf;
 
 use super::glob::Pattern;

@@ -4,8 +4,9 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
+use crate::find::out::stderr;
 use std::error::Error;
-use std::io::{stderr, Write};
+use std::io::Write;
 use std::str::FromStr;
 
 use super::{ComparableValue, Matcher, MatcherIO, WalkEntry};

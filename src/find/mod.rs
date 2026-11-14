@@ -6,6 +6,7 @@
 
 pub mod error;
 pub mod matchers;
+pub mod out;
 
 use error::ParseError;
 use matchers::{Follow, WalkEntry};
@@ -13,7 +14,7 @@ use std::cell::RefCell;
 use std::error::Error;
 #[cfg(unix)]
 use std::io::IsTerminal;
-use std::io::{self, stderr, stdout, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -102,7 +103,7 @@ impl StandardDependencies {
         let tty = None;
 
         Self {
-            output: Rc::new(RefCell::new(stdout())),
+            output: Rc::new(RefCell::new(out::Stdout::new())),
             now: SystemTime::now(),
             tty,
         }
@@ -126,8 +127,9 @@ impl Dependencies for StandardDependencies {
 
     fn confirm(&self, prompt: &str) -> bool {
         // POSIX requires the prompt on stderr.
-        eprint!("{}", prompt);
-        let _ = stderr().flush();
+        let mut err = out::stderr();
+        let _ = write!(err, "{prompt}");
+        let _ = err.flush();
 
         // self.tty is Some when stdin was a terminal at startup: read from the
         // controlling terminal so responses come from the keyboard even when
@@ -200,7 +202,7 @@ impl Iterator for Files0Paths {
             }
             if buffer.is_empty() {
                 // Skip it so as to avoid a file not found error.
-                eprintln!("{}: invalid zero-length file name", program_name());
+                out::eprintln_flushed!("{}: invalid zero-length file name", program_name());
                 continue;
             }
             return Some(String::from_utf8(buffer).map_err(Into::into));
@@ -320,7 +322,7 @@ fn process_dir(
             Err(err) => {
                 ret = 1;
                 // Skua: `find: ‘x’: No such file or directory`, as GNU find prints it.
-                writeln!(&mut stderr(), "{}: {err}", program_name()).unwrap();
+                writeln!(&mut out::stderr(), "{}: {err}", program_name()).unwrap();
             }
             Ok(entry) => {
                 let mut matcher_io = matchers::MatcherIO::new(deps);
@@ -529,11 +531,12 @@ pub fn program_name() -> &'static str {
 /// with the exit code. Note that the first string in args is expected to be
 /// the name of the executable.
 pub fn find_main(args: &[&str], deps: &dyn Dependencies) -> i32 {
-    match do_find(&args[1..], deps) {
+    let ret = match do_find(&args[1..], deps) {
         Ok(ret) => ret,
         Err(e) => {
             // `do_find` was handed argv without the program name.
             let e = ParseError::shift(e, 1);
+            out::flush_pending();
             // Only at a terminal or with `UUTILS_DIAG=always`, so captured
             // output (the GNU and bfs suites) keeps the single GNU line.
             let rendered = uucore::diagnostics::enabled()
@@ -541,8 +544,28 @@ pub fn find_main(args: &[&str], deps: &dyn Dependencies) -> i32 {
                     .is_some_and(|parse_error| parse_error.render(args));
             // The report heads itself with the same line.
             if !rendered {
-                writeln!(&mut stderr(), "{}: {e}", program_name()).unwrap();
+                writeln!(&mut out::stderr(), "{}: {e}", program_name()).unwrap();
             }
+            1
+        }
+    };
+    // Skua: the rest of the block-buffered standard output (see `out`).
+    match out::finish() {
+        Ok(()) => ret,
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+            // Same as `StdoutErrors`: bash reports a SIGPIPE death as 141.
+            if cfg!(all(windows, not(test))) {
+                std::process::exit(141);
+            }
+            ret
+        }
+        Err(e) => {
+            let _ = writeln!(
+                &mut out::stderr(),
+                "{}: 'standard output': {}",
+                program_name(),
+                uucore::error::strip_errno(&e)
+            );
             1
         }
     }

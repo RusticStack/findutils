@@ -4,10 +4,8 @@
 // license that can be found in the LICENSE file or at
 // https://opensource.org/licenses/MIT.
 
-use std::{
-    fs::read_dir,
-    io::{stderr, Write},
-};
+use crate::find::out::stderr;
+use std::{fs::read_dir, io::Write};
 
 use super::{Matcher, MatcherIO, WalkEntry};
 
