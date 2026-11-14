@@ -7,7 +7,7 @@
 use std::fs::File;
 use std::io::{stderr, Write};
 
-use super::{Matcher, MatcherIO, WalkEntry};
+use super::{Matcher, MatcherIO, StdoutErrors, WalkEntry};
 
 pub enum PrintDelimiter {
     Newline,
@@ -27,6 +27,7 @@ impl std::fmt::Display for PrintDelimiter {
 pub struct Printer {
     delimiter: PrintDelimiter,
     output_file: Option<File>,
+    stdout_errors: StdoutErrors,
 }
 
 impl Printer {
@@ -34,16 +35,16 @@ impl Printer {
         Self {
             delimiter,
             output_file,
+            stdout_errors: StdoutErrors::default(),
         }
     }
 
-    fn print(
-        &self,
-        file_info: &WalkEntry,
-        matcher_io: &mut MatcherIO,
-        mut out: impl Write,
-        print_error_message: bool,
-    ) {
+    pub fn with_stdout_errors(mut self, stdout_errors: StdoutErrors) -> Self {
+        self.stdout_errors = stdout_errors;
+        self
+    }
+
+    fn print(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO, mut out: impl Write) {
         let result = write!(
             out,
             "{}{}",
@@ -52,20 +53,22 @@ impl Printer {
         )
         .and_then(|()| out.flush());
         if let Err(e) = result {
+            if self.output_file.is_none() {
+                self.stdout_errors.handle(&e, matcher_io);
+                return;
+            }
             if e.kind() == std::io::ErrorKind::BrokenPipe {
                 // Skua patch: on Windows exit as bash reports a SIGPIPE death (141), like GNU
                 // find under Git Bash.
                 std::process::exit(if cfg!(windows) { 141 } else { 0 });
             }
-            if print_error_message {
-                writeln!(
-                    &mut stderr(),
-                    "Error writing {:?} for {}",
-                    file_info.path().to_string_lossy(),
-                    e
-                )
-                .unwrap();
-            }
+            writeln!(
+                &mut stderr(),
+                "Error writing {:?} for {}",
+                file_info.path().to_string_lossy(),
+                e
+            )
+            .unwrap();
             matcher_io.set_exit_code(1);
         }
     }
@@ -74,13 +77,12 @@ impl Printer {
 impl Matcher for Printer {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
         if let Some(file) = &self.output_file {
-            self.print(file_info, matcher_io, file, true);
+            self.print(file_info, matcher_io, file);
         } else {
             self.print(
                 file_info,
                 matcher_io,
                 &mut *matcher_io.deps.get_output().borrow_mut(),
-                false,
             );
         }
         true

@@ -157,23 +157,60 @@ impl Statistics {
 
 #[derive(Debug)]
 enum Patterns {
-    String(Vec<String>),
+    /// Plain substring patterns. With `--ignore-case` they are stored lowercased and matched
+    /// against the lowercased entry.
+    String {
+        patterns: Vec<String>,
+        ignore_case: bool,
+    },
     Regex(Vec<Regex>),
 }
 
 impl Patterns {
+    fn string(patterns: Vec<String>, ignore_case: bool) -> Self {
+        let patterns = if ignore_case {
+            patterns.iter().map(|s| s.to_lowercase()).collect()
+        } else {
+            patterns
+        };
+        Self::String {
+            patterns,
+            ignore_case,
+        }
+    }
+
     fn any_match(&self, entry: &str) -> bool {
         match self {
-            Self::String(v) => v.iter().any(|s| entry.contains(s)),
+            Self::String {
+                patterns,
+                ignore_case,
+            } => {
+                let entry = fold_case(entry, *ignore_case);
+                patterns.iter().any(|s| entry.contains(s.as_str()))
+            }
             Self::Regex(v) => v.iter().any(|r| r.find(entry).is_some()),
         }
     }
 
     fn all_match(&self, entry: &str) -> bool {
         match self {
-            Self::String(v) => v.iter().all(|s| entry.contains(s)),
+            Self::String {
+                patterns,
+                ignore_case,
+            } => {
+                let entry = fold_case(entry, *ignore_case);
+                patterns.iter().all(|s| entry.contains(s.as_str()))
+            }
             Self::Regex(v) => v.iter().all(|r| r.find(entry).is_some()),
         }
+    }
+}
+
+fn fold_case(entry: &str, ignore_case: bool) -> Cow<'_, str> {
+    if ignore_case {
+        Cow::Owned(entry.to_lowercase())
+    } else {
+        Cow::Borrowed(entry)
     }
 }
 
@@ -210,7 +247,7 @@ impl TryFrom<ArgMatches> for ParsedInfo {
             basename: value.get_flag("basename"),
             db: value
                 .get_one::<String>("database")
-                .map_or_else(Vec::new, |s| std::env::split_paths(s).collect()),
+                .map_or_else(Vec::new, |s| crate::split_paths(s.as_ref()).collect()),
 
             mode: value
                 .get_many::<Id>("mode")
@@ -264,7 +301,7 @@ impl TryFrom<ArgMatches> for ParsedInfo {
             }
             Patterns::Regex(compiled)
         } else {
-            Patterns::String(patterns)
+            Patterns::string(patterns, config.ignore_case)
         };
         Ok(Self { patterns, config })
     }
@@ -276,7 +313,8 @@ fn uu_app() -> Command {
         .args_override_self(true)
         .arg(
             Arg::new("all")
-                .short('a')
+                .short('A')
+                .short_alias('a')
                 .long("all")
                 .action(ArgAction::SetTrue),
         )
@@ -447,26 +485,17 @@ impl Iterator for DbReader {
         // read the actual path fragment
         let mut buf = Vec::new();
         self.reader.read_until(b'\0', &mut buf).ok()?;
-        let prefix = self.prev.as_ref().map(|s| {
-            s.to_bytes()
-                .iter()
-                .take(self.prefix as usize)
-                .collect::<Vec<_>>()
-        });
-        if (prefix.as_ref().map_or(0, std::vec::Vec::len) as isize) < size {
+        // the shared prefix count must stay within the previous entry
+        let prev = self.prev.as_ref().map_or(&[][..], |s| s.to_bytes());
+        let Some(prefix) = usize::try_from(self.prefix)
+            .ok()
+            .and_then(|len| prev.get(..len))
+        else {
             return Some(Err(Error::InvalidDb(
                 self.path.to_string_lossy().to_string(),
             )));
-        }
-        let res = CString::from_vec_with_nul(
-            prefix
-                .unwrap_or_default()
-                .into_iter()
-                .copied()
-                .chain(buf)
-                .collect(),
-        )
-        .ok()?;
+        };
+        let res = CString::from_vec_with_nul(prefix.iter().copied().chain(buf).collect()).ok()?;
         self.prev = Some(res.clone());
         Some(Ok(res))
     }
@@ -505,22 +534,6 @@ impl DbReader {
     }
 }
 
-/// Decode a raw database entry into a path.
-///
-/// On Unix a path is an arbitrary byte string, so the bytes are used verbatim. On other
-/// platforms paths aren't raw bytes; the database stores UTF-8 text (find emits paths via
-/// `Path::to_string_lossy`), so it is decoded lossily back into a path.
-#[cfg(unix)]
-fn bytes_to_path(bytes: &[u8]) -> PathBuf {
-    use std::os::unix::ffi::OsStrExt;
-    PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
-}
-
-#[cfg(not(unix))]
-fn bytes_to_path(bytes: &[u8]) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(bytes).into_owned())
-}
-
 /// Whether `path` currently exists on disk.
 ///
 /// With `follow_symlinks` (the `-L`/`--follow` default) a symlink is resolved, so a broken
@@ -542,7 +555,7 @@ fn match_entry(entry: &CStr, config: &Config, patterns: &Patterns) -> bool {
     #[cfg(not(windows))]
     const GLOB_METACHARS: &str = r"*?[]\";
 
-    let buf = bytes_to_path(entry.to_bytes());
+    let buf = crate::bytes_to_path(entry.to_bytes());
     let name = if config.basename {
         let Some(path) = buf.file_name() else {
             return false;
@@ -629,6 +642,12 @@ fn do_locate(args: &[&str]) -> LocateResult<()> {
                 .iter()
                 .filter_map(|p| DbReader::new(p.as_path()).ok())
             {
+                // --limit applies to the whole output, not to each database
+                let remaining = config.limit.map_or(usize::MAX, |l| l.saturating_sub(count));
+                if remaining == 0 && config.mode != Mode::Statistics {
+                    break;
+                }
+
                 // if we can get the mtime of the file, check it against the current time
                 if let Ok(metadata) = fs::metadata(&dbreader.path) {
                     if let Ok(time) = metadata.modified() {
@@ -657,7 +676,7 @@ fn do_locate(args: &[&str]) -> LocateResult<()> {
                 let mut write_result = Ok(());
                 let db_count = dbreader.by_ref().process_results(|iter| {
                     iter.filter(|s| match_entry(s.as_c_str(), &config, &patterns))
-                        .take(config.limit.unwrap_or(usize::MAX))
+                        .take(remaining)
                         .inspect(|s| {
                             if (config.mode == Mode::Normal || config.print) && write_result.is_ok()
                             {

@@ -190,8 +190,8 @@ fn xargs_max_chars() {
             .stdout_only("ab cd\nefg\n");
     }
 
-    // Behavior should be the same with -x, which only takes effect with -L or
-    // -n.
+    // Behavior should be the same with -x: without -L or -n, it only takes
+    // effect for an argument that does not fit into a command of its own.
     ucmd()
         .args(&["-xs11"])
         .pipe_in("ab cd efg")
@@ -220,6 +220,24 @@ fn xargs_exit_on_large() {
         .fails_with_code(1)
         .stderr_contains("xargs: ")
         .no_stdout();
+}
+
+#[test]
+fn xargs_exit_on_large_single_argument() {
+    // With -x nothing runs; without -x the command built so far runs first.
+    ucmd()
+        .args(&["-xs11"])
+        .pipe_in("ab cdefghijkl")
+        .fails_with_code(1)
+        .stderr_contains("Error:")
+        .no_stdout();
+
+    ucmd()
+        .args(&["-s11"])
+        .pipe_in("ab cdefghijkl")
+        .fails_with_code(1)
+        .stderr_contains("Error:")
+        .stdout_is("ab\n");
 }
 
 #[test]
@@ -528,6 +546,31 @@ fn xargs_replace() {
 }
 
 #[test]
+fn xargs_replace_default_command() {
+    // The default command is echo with no initial arguments, so the replace
+    // token never appears and each input item should produce a blank line.
+    for args in [vec!["-I", "R"], vec!["-i"], vec!["--replace"]] {
+        ucmd()
+            .args(&args)
+            .pipe_in("hello\nworld\n")
+            .succeeds()
+            .stdout_only("\n\n");
+    }
+
+    ucmd()
+        .args(&["-I", "R", "echo"])
+        .pipe_in("hello\nworld\n")
+        .succeeds()
+        .stdout_only("\n\n");
+
+    ucmd()
+        .args(&["-I", "R", "echo", "R"])
+        .pipe_in("hello\nworld\n")
+        .succeeds()
+        .stdout_only("hello\nworld\n");
+}
+
+#[test]
 fn xargs_replace_multiple_lines() {
     ucmd()
         .args(&["-I", "_", "echo", "[_]"])
@@ -596,6 +639,30 @@ fn xargs_eof() {
 }
 
 #[test]
+fn xargs_empty_eof() {
+    for option_style in [vec!["-E", ""], vec!["-e", ""], vec!["--eof="]] {
+        ucmd()
+            .args(option_style.as_slice())
+            .arg("-n1")
+            .pipe_in("a\n''\nb\nc\n")
+            .succeeds()
+            .stdout_only("a\n\nb\nc\n");
+    }
+}
+
+#[test]
+fn xargs_bare_eof_disables_marker() {
+    // -e and --eof without a value mean "no EOF string", so "{}" is an ordinary item
+    for flag in ["-e", "--eof"] {
+        ucmd()
+            .arg(flag)
+            .pipe_in("ab {} ef")
+            .succeeds()
+            .stdout_only("ab {} ef\n");
+    }
+}
+
+#[test]
 fn xargs_eof_with_delimiter() {
     ucmd()
         .args(&["-0", "-Ecd"])
@@ -632,5 +699,47 @@ fn xargs_non_utf8_argument_is_rejected_gracefully() {
         .arg(OsString::from_vec(vec![b'-', b'I', 0xff]))
         .fails_with_code(1)
         .stderr_contains("non-UTF-8")
+        .no_stdout();
+}
+
+#[test]
+fn xargs_replace_reads_quoted_lines() {
+    // Like GNU: leading blanks and blank lines are skipped, quotes are
+    // removed, inner and trailing blanks stay, and -E still ends the input.
+    ucmd()
+        .args(&[
+            "-E",
+            "END",
+            "-I",
+            "{}",
+            &path_to_testing_commandline(),
+            "-",
+            "--no_print_cwd",
+            "[{}]",
+        ])
+        .pipe_in("  a b  \n\n''\n\t\"q r\" x\nEND\nlast\n")
+        .succeeds()
+        .stdout_only(
+            "args=\n--no_print_cwd\n[a b  ]\n\
+            args=\n--no_print_cwd\n[]\n\
+            args=\n--no_print_cwd\n[q r x]\n",
+        );
+}
+
+#[test]
+fn xargs_replace_unterminated_quote() {
+    // An unbalanced quote in a -I line is an error, as without -I.
+    ucmd()
+        .args(&[
+            "-I",
+            "{}",
+            &path_to_testing_commandline(),
+            "-",
+            "--no_print_cwd",
+            "[{}]",
+        ])
+        .pipe_in("it's\nb\n")
+        .fails_with_code(1)
+        .stderr_contains("Error: Unterminated quote:")
         .no_stdout();
 }
