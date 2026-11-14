@@ -113,6 +113,9 @@ fn dot_join(name: &OsStr) -> PathBuf {
 
 impl Matcher for SingleExecMatcher {
     fn matches(&self, file_info: &WalkEntry, matcher_io: &mut MatcherIO) -> bool {
+        // Skua: write the pending output before the prompt of -ok/-okdir and the command of
+        // -exec/-execdir, so a closed pipe ends find before either (see `out::flush_pending`).
+        crate::find::out::flush_pending();
         let path_to_file = if self.exec_in_parent_dir {
             if let Some(f) = file_info.path().file_name() {
                 dot_join(f.as_ref())

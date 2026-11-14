@@ -60,6 +60,8 @@ impl Matcher for DeleteMatcher {
             return true;
         }
 
+        // Skua: write the pending output first, so a closed pipe ends find before it deletes.
+        crate::find::out::flush_pending();
         match self.delete(file_info) {
             Ok(()) => true,
             Err(e) => {

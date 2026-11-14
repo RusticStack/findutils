@@ -94,9 +94,14 @@ fn write_pending() -> io::Result<()> {
     result
 }
 
-/// Writes the pending output now. An error is kept for `finish` instead of being returned.
+/// Writes the pending output now. A closed pipe ends `find` at once with status 141 (as bash
+/// reports a SIGPIPE death, like GNU find under Git Bash), so no `-exec`, `-ok` or `-delete`
+/// runs after the reader is gone. Any other error is kept for `finish`.
 pub fn flush_pending() {
     if let Err(e) = write_pending() {
+        if e.kind() == io::ErrorKind::BrokenPipe && cfg!(all(windows, not(test))) {
+            std::process::exit(141);
+        }
         DEFERRED.with_borrow_mut(|slot| {
             if slot.is_none() {
                 *slot = Some(e);
