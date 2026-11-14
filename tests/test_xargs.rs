@@ -229,14 +229,14 @@ fn xargs_exit_on_large_single_argument() {
         .args(&["-xs11"])
         .pipe_in("ab cdefghijkl")
         .fails_with_code(1)
-        .stderr_contains("Error:")
+        .stderr_contains("xargs: ")
         .no_stdout();
 
     ucmd()
         .args(&["-s11"])
         .pipe_in("ab cdefghijkl")
         .fails_with_code(1)
-        .stderr_contains("Error:")
+        .stderr_contains("xargs: ")
         .stdout_is("ab\n");
 }
 
@@ -740,6 +740,6 @@ fn xargs_replace_unterminated_quote() {
         ])
         .pipe_in("it's\nb\n")
         .fails_with_code(1)
-        .stderr_contains("Error: Unterminated quote:")
+        .stderr_contains("xargs: Unterminated quote:")
         .no_stdout();
 }
